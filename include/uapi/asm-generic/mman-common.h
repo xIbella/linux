@@ -78,6 +78,8 @@
 #define MADV_DONTNEED_LOCKED	24	/* like DONTNEED, but drop locked pages too */
 
 #define MADV_COLLAPSE	25		/* Synchronous hugepage collapse */
+#define MADV_UNSHARE	26		/* Unshare page range */
+
 
 /* compatibility flags */
 #define MAP_FILE	0

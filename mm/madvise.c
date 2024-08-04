@@ -59,6 +59,7 @@ static int madvise_need_mmap_write(int behavior)
 	case MADV_FREE:
 	case MADV_POPULATE_READ:
 	case MADV_POPULATE_WRITE:
+	case MADV_UNSHARE:
 	case MADV_COLLAPSE:
 		return 0;
 	default:
@@ -934,7 +935,7 @@ static long madvise_dontneed_free(struct vm_area_struct *vma,
 static long madvise_populate(struct mm_struct *mm, unsigned long start,
 		unsigned long end, int behavior)
 {
-	const bool write = behavior == MADV_POPULATE_WRITE;
+	const bool write = (behavior == MADV_POPULATE_WRITE) || (behavior == MADV_UNSHARE);
 	int locked = 1;
 	long pages;
 
@@ -1178,6 +1179,7 @@ madvise_behavior_valid(int behavior)
 	case MADV_PAGEOUT:
 	case MADV_POPULATE_READ:
 	case MADV_POPULATE_WRITE:
+	case MADV_UNSHARE:
 #ifdef CONFIG_KSM
 	case MADV_MERGEABLE:
 	case MADV_UNMERGEABLE:
@@ -1458,6 +1460,7 @@ int do_madvise(struct mm_struct *mm, unsigned long start, size_t len_in, int beh
 	switch (behavior) {
 	case MADV_POPULATE_READ:
 	case MADV_POPULATE_WRITE:
+	case MADV_UNSHARE:
 		error = madvise_populate(mm, start, end, behavior);
 		break;
 	default:

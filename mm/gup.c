@@ -1569,6 +1569,19 @@ static long __get_user_pages(struct mm_struct *mm,
 				}
 				goto retry;
 			}
+
+			if (gup_flags & FOLL_MADV_UNSHARE) {
+    			vma = vma_lookup(mm, start);
+    			if (!vma || !is_cow_mapping(vma->vm_flags)) {
+        			goto next_page;
+    			}
+    			if (check_vma_flags(vma, gup_flags)) {
+        			ret = -EINVAL;
+        			goto out;
+    			}
+    			goto retry;
+			}
+
 			vma = gup_vma_lookup(mm, start);
 			if (!vma && in_gate_area(mm, start)) {
 				ret = get_gate_page(mm, start & PAGE_MASK,
@@ -2088,7 +2101,7 @@ long faultin_page_range(struct mm_struct *mm, unsigned long start,
 	 * !FOLL_FORCE: Require proper access permissions.
 	 */
 	gup_flags = FOLL_TOUCH | FOLL_HWPOISON | FOLL_UNLOCKABLE |
-		    FOLL_MADV_POPULATE;
+		    FOLL_MADV_POPULATE | FOLL_MADV_UNSHARE;
 	if (write)
 		gup_flags |= FOLL_WRITE;
 
