@@ -678,6 +678,8 @@ static struct page *no_page_table(struct vm_area_struct *vma,
 	if (!(flags & FOLL_DUMP))
 		return NULL;
 
+	if (flags & FOLL_MADV_UNSHARE)
+		return ERR_PTR(-EALREADY);
 	/*
 	 * When core dumping, we don't want to allocate unnecessary pages or
 	 * page tables.  Return error instead of NULL to skip handle_mm_fault,
@@ -1640,6 +1642,8 @@ retry:
 				ret = PTR_ERR(page);
 				goto out;
 			}
+		} else if (PTR_ERR(page) == -EALREADY) {
+			goto next_page;
 		} else if (IS_ERR(page)) {
 			ret = PTR_ERR(page);
 			goto out;
@@ -2081,7 +2085,7 @@ long populate_vma_page_range(struct vm_area_struct *vma,
  * mm->mmap_lock must be held. If it's released, *@locked will be set to 0.
  */
 long faultin_page_range(struct mm_struct *mm, unsigned long start,
-			unsigned long end, bool write, int *locked)
+			unsigned long end, bool write, bool unshare, int *locked)
 {
 	unsigned long nr_pages = (end - start) / PAGE_SIZE;
 	int gup_flags;
@@ -2100,8 +2104,12 @@ long faultin_page_range(struct mm_struct *mm, unsigned long start,
 	 *		  a poisoned page.
 	 * !FOLL_FORCE: Require proper access permissions.
 	 */
-	gup_flags = FOLL_TOUCH | FOLL_HWPOISON | FOLL_UNLOCKABLE |
-		    FOLL_MADV_POPULATE | FOLL_MADV_UNSHARE;
+	gup_flags = FOLL_TOUCH | FOLL_HWPOISON | FOLL_UNLOCKABLE;
+	if (unshare)
+		gup_flags |= FOLL_MADV_UNSHARE;
+	else
+		gup_flags |= FOLL_MADV_POPULATE;
+	
 	if (write)
 		gup_flags |= FOLL_WRITE;
 

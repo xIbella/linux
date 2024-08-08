@@ -936,12 +936,13 @@ static long madvise_populate(struct mm_struct *mm, unsigned long start,
 		unsigned long end, int behavior)
 {
 	const bool write = (behavior == MADV_POPULATE_WRITE) || (behavior == MADV_UNSHARE);
+	const bool unshare = (behavior == MADV_UNSHARE);
 	int locked = 1;
 	long pages;
 
 	while (start < end) {
 		/* Populate (prefault) page tables readable/writable. */
-		pages = faultin_page_range(mm, start, end, write, &locked);
+		pages = faultin_page_range(mm, start, end, write, unshare, &locked);
 		if (!locked) {
 			mmap_read_lock(mm);
 			locked = 1;
