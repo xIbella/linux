@@ -675,11 +675,11 @@ static struct page *follow_hugepd(struct vm_area_struct *vma, hugepd_t hugepd,
 static struct page *no_page_table(struct vm_area_struct *vma,
 				  unsigned int flags, unsigned long address)
 {
-	if (!(flags & FOLL_DUMP))
-		return NULL;
-
 	if (flags & FOLL_MADV_UNSHARE)
 		return ERR_PTR(-EALREADY);
+
+	if (!(flags & FOLL_DUMP))
+		return NULL;
 	/*
 	 * When core dumping, we don't want to allocate unnecessary pages or
 	 * page tables.  Return error instead of NULL to skip handle_mm_fault,
@@ -1570,18 +1570,45 @@ static long __get_user_pages(struct mm_struct *mm,
 					goto out;
 				}
 				goto retry;
-			}
+			} else if (gup_flags & FOLL_MADV_UNSHARE) {
+				vma = find_vma(mm, start);
+				if (!vma) {
+					/* process all remaining pages */
+					i += nr_pages;
+					start += nr_pages * PAGE_SIZE;
+					nr_pages = 0;
+					goto out;
+				}
 
-			if (gup_flags & FOLL_MADV_UNSHARE) {
-    			vma = vma_lookup(mm, start);
-    			if (!vma || !is_cow_mapping(vma->vm_flags)) {
-        			goto next_page;
-    			}
-    			if (check_vma_flags(vma, gup_flags)) {
-        			ret = -EINVAL;
-        			goto out;
-    			}
-    			goto retry;
+				/* process any hole we might have skipped */
+				if (start < vma->vm_start) {
+					unsigned long diff_pages = (start - vma->vm_start) >> PAGE_SHIFT;
+
+					diff_pages = min_t(unsigned long, diff_pages, nr_pages);
+					i += diff_pages;
+					start += diff_pages << PAGE_SHIFT;
+
+					nr_pages -= diff_pages;
+					if (nr_pages)
+						continue;
+					goto out;
+				}
+
+				/* skip any VMAs we cannot handle. */
+				if (!is_cow_mapping(vma->vm_flags) ||
+				    check_vma_flags(vma, gup_flags)) {
+					unsigned long diff_pages = (vma->vm_end - start) >> PAGE_SHIFT;
+
+					diff_pages = min_t(unsigned long, diff_pages, nr_pages);
+					i += diff_pages;
+					start += diff_pages << PAGE_SHIFT;
+
+					nr_pages -= diff_pages;
+					if (nr_pages)
+						continue;
+					goto out;
+				}
+				goto retry;
 			}
 
 			vma = gup_vma_lookup(mm, start);
@@ -1643,7 +1670,13 @@ retry:
 				goto out;
 			}
 		} else if (PTR_ERR(page) == -EALREADY) {
-			goto next_page;
+			/* skip a single page */
+			i++;
+			start += PAGE_SIZE;
+			nr_pages--;
+			if (nr_pages)
+				continue;
+			goto out;
 		} else if (IS_ERR(page)) {
 			ret = PTR_ERR(page);
 			goto out;
@@ -2063,6 +2096,30 @@ long populate_vma_page_range(struct vm_area_struct *vma,
 	return ret;
 }
 
+long unshare_page_range(struct mm_struct *mm, unsigned long start,
+		unsigned long end, int *locked)
+{
+	unsigned long nr_pages = (end - start) / PAGE_SIZE;
+	int gup_flags;
+	int ret;
+
+	VM_BUG_ON(!PAGE_ALIGNED(start));
+	VM_BUG_ON(!PAGE_ALIGNED(end));
+	mmap_assert_locked(mm);
+
+	/*
+	 * FOLL_HWPOISON: Return -EHWPOISON instead of -EFAULT when we hit
+	 *		  a poisoned page.
+	 * FOLL_FORCE: Ignore access permissions.
+	 */
+	gup_flags = FOLL_HWPOISON | FOLL_UNLOCKABLE | FOLL_FORCE | FOLL_MADV_UNSHARE;
+
+	ret = __get_user_pages_locked(mm, start, nr_pages, NULL, locked,
+				      gup_flags);
+	lru_add_drain();
+	return ret;
+}
+
 /*
  * faultin_page_range() - populate (prefault) page tables inside the
  *			  given range readable/writable
@@ -2085,7 +2142,7 @@ long populate_vma_page_range(struct vm_area_struct *vma,
  * mm->mmap_lock must be held. If it's released, *@locked will be set to 0.
  */
 long faultin_page_range(struct mm_struct *mm, unsigned long start,
-			unsigned long end, bool write, bool unshare, int *locked)
+			unsigned long end, bool write, int *locked)
 {
 	unsigned long nr_pages = (end - start) / PAGE_SIZE;
 	int gup_flags;
@@ -2104,12 +2161,8 @@ long faultin_page_range(struct mm_struct *mm, unsigned long start,
 	 *		  a poisoned page.
 	 * !FOLL_FORCE: Require proper access permissions.
 	 */
-	gup_flags = FOLL_TOUCH | FOLL_HWPOISON | FOLL_UNLOCKABLE;
-	if (unshare)
-		gup_flags |= FOLL_MADV_UNSHARE;
-	else
-		gup_flags |= FOLL_MADV_POPULATE;
-	
+	gup_flags = FOLL_TOUCH | FOLL_HWPOISON | FOLL_UNLOCKABLE |
+		    FOLL_MADV_POPULATE;
 	if (write)
 		gup_flags |= FOLL_WRITE;
 

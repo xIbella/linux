@@ -783,8 +783,10 @@ struct anon_vma *folio_anon_vma(struct folio *folio);
 void unmap_mapping_folio(struct folio *folio);
 extern long populate_vma_page_range(struct vm_area_struct *vma,
 		unsigned long start, unsigned long end, int *locked);
+extern long unshare_page_range(struct mm_struct *mm, unsigned long start,
+		unsigned long end, int *locked);
 extern long faultin_page_range(struct mm_struct *mm, unsigned long start,
-		unsigned long end, bool write, bool unshare, int *locked);
+		unsigned long end, bool write, int *locked);
 extern bool mlock_future_ok(struct mm_struct *mm, unsigned long flags,
 			       unsigned long bytes);
 
@@ -1251,7 +1253,7 @@ static inline bool gup_must_unshare(struct vm_area_struct *vma,
 	 * has to be writable -- and if it references (part of) an anonymous
 	 * folio, that part is required to be marked exclusive.
 	 */
-	if ((flags & (FOLL_WRITE | FOLL_PIN)) != FOLL_PIN || !(flags & FOLL_MADV_UNSHARE))
+	if ((flags & (FOLL_WRITE | FOLL_PIN)) != FOLL_PIN && !(flags & FOLL_MADV_UNSHARE))
 		return false;
 	/*
 	 * Note: PageAnon(page) is stable until the page is actually getting
@@ -1263,7 +1265,7 @@ static inline bool gup_must_unshare(struct vm_area_struct *vma,
 		 * pinning does not have the semantics to observe successive
 		 * changes through the process page tables.
 		 */
-		if (!(flags & FOLL_LONGTERM))
+		if (!(flags & FOLL_LONGTERM) || (flags & FOLL_MADV_UNSHARE))
 			return false;
 
 		/* We really need the vma ... */
