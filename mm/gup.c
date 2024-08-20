@@ -2101,7 +2101,7 @@ long unshare_page_range(struct mm_struct *mm, unsigned long start,
 {
 	unsigned long nr_pages = (end - start) / PAGE_SIZE;
 	int gup_flags;
-	int ret;
+	long ret;
 
 	VM_BUG_ON(!PAGE_ALIGNED(start));
 	VM_BUG_ON(!PAGE_ALIGNED(end));
