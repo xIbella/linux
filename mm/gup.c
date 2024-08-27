@@ -1582,7 +1582,7 @@ static long __get_user_pages(struct mm_struct *mm,
 
 				/* process any hole we might have skipped */
 				if (start < vma->vm_start) {
-					unsigned long diff_pages = (start - vma->vm_start) >> PAGE_SHIFT;
+					unsigned long diff_pages = (vma->vm_start - start) >> PAGE_SHIFT;
 
 					diff_pages = min_t(unsigned long, diff_pages, nr_pages);
 					i += diff_pages;
@@ -1593,9 +1593,14 @@ static long __get_user_pages(struct mm_struct *mm,
 						continue;
 					goto out;
 				}
+				WARN_ON_ONCE(start >= vma->vm_end);
 
-				/* skip any VMAs we cannot handle. */
+				/*
+				 * Skip any VMAs we cannot handle. Let's limit
+				 * ourselves to anon VMAs for now.
+				 */
 				if (!is_cow_mapping(vma->vm_flags) ||
+					!vma_is_anonymous(vma) ||
 				    check_vma_flags(vma, gup_flags)) {
 					unsigned long diff_pages = (vma->vm_end - start) >> PAGE_SHIFT;
 
