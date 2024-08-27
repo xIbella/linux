@@ -59,6 +59,7 @@ static int madvise_need_mmap_write(int behavior)
 	case MADV_FREE:
 	case MADV_POPULATE_READ:
 	case MADV_POPULATE_WRITE:
+	case MADV_UNSHARE:
 	case MADV_COLLAPSE:
 		return 0;
 	default:
@@ -931,6 +932,118 @@ static long madvise_dontneed_free(struct vm_area_struct *vma,
 		return -EINVAL;
 }
 
+static int madvise_unshare_pmd_entry(pmd_t *pmdp, unsigned long start,
+		unsigned long end, struct mm_walk *walk)
+{
+	struct vm_area_struct *vma = walk->vma;
+	struct page *page;
+	spinlock_t *ptl;
+	pte_t *ptep, pte;
+	vm_fault_t ret;
+	pmd_t pmd;
+
+	pmd = pmdp_get(pmdp);
+	if (IS_ENABLED(CONFIG_PGTABLE_HAS_HUGE_LEAVES) && pmd_leaf(pmd)) {
+		ptl = pmd_lock(vma->vm_mm, pmdp);
+		pmd = pmdp_get(pmdp);
+
+		if (pmd_none(pmd)) {
+			spin_unlock(ptl);
+			return 0;
+		}
+		if (!pmd_leaf(pmd)) {
+			/* Might now have a PTE table. */
+			spin_unlock(ptl);
+			goto retry;
+		}
+		if (!pmd_present(pmd)) {
+			/* TODO: handle migration/swap entries better. */
+			spin_unlock(ptl);
+			goto unshare;
+		}
+		if (pmd_write(pmd)) {
+			spin_unlock(ptl);
+			return 0;
+		}
+
+		page = vm_normal_page_pmd(vma, start, pmd);
+		if (page && PageAnon(page) && !PageAnonExclusive(page)) {
+			spin_unlock(ptl);
+			goto unshare;
+		}
+
+		spin_unlock(ptl);
+		return 0;
+	}
+
+retry:
+	ptep = pte_offset_map_lock(vma->vm_mm, pmdp, start, &ptl);
+	if (!ptep)
+		return 0;
+
+	for (; start < end; ptep++, start += PAGE_SIZE) {
+		pte = ptep_get(ptep);
+
+		if (pte_none(pte))
+			continue;
+		if (!pte_present(pte)) {
+			/* TODO: handle migration/swap entries better. */
+			pte_unmap_unlock(ptep, ptl);
+			goto unshare;
+		}
+		if (pte_write(pte))
+			continue;
+
+		/* We only care about shared anonymous pages. */
+		page = vm_normal_page(vma, start, pte);
+		if (page && PageAnon(page) && !PageAnonExclusive(page)) {
+			pte_unmap_unlock(ptep, ptl);
+			goto unshare;
+		}
+	}
+	pte_unmap_unlock(ptep, ptl);
+	return 0;
+unshare:
+	ret = handle_mm_fault(vma, start, FAULT_FLAG_UNSHARE, NULL);
+	if (ret & VM_FAULT_ERROR) {
+		if (ret & VM_FAULT_OOM)
+			return -ENOMEM;
+		if (ret & (VM_FAULT_HWPOISON | VM_FAULT_HWPOISON_LARGE))
+			return -EHWPOISON;
+		if (ret & (VM_FAULT_SIGBUS | VM_FAULT_SIGSEGV)) {
+			/* Let's skip this address, this shouldn't happen. */
+			start += PAGE_SIZE;
+			if (start >= end)
+				return 0;
+		}
+	}
+	/* Retry, re-processing from the faulting address. */
+	goto retry;
+}
+
+static int madvise_unshare_test_walk(unsigned long start, unsigned long end,
+		struct mm_walk *walk)
+{
+	struct vm_area_struct *vma = walk->vma;
+
+	/* Anon folios we can unshare are only in COW mappings. */
+	if (is_cow_mapping(vma->vm_flags))
+		return 0;
+	return 1;
+}
+
+static const struct mm_walk_ops unshare_walk_ops = {
+	.pmd_entry = madvise_unshare_pmd_entry,
+	.test_walk = madvise_unshare_test_walk,
+	.walk_lock = PGWALK_RDLOCK,
+};
+
+static long madvise_unshare(struct mm_struct *mm, unsigned long start,
+		unsigned long end)
+{
+	return walk_page_range(mm, start, end, &unshare_walk_ops, NULL);
+}
+
 static long madvise_populate(struct mm_struct *mm, unsigned long start,
 		unsigned long end, int behavior)
 {
@@ -1178,6 +1291,7 @@ madvise_behavior_valid(int behavior)
 	case MADV_PAGEOUT:
 	case MADV_POPULATE_READ:
 	case MADV_POPULATE_WRITE:
+	case MADV_UNSHARE:
 #ifdef CONFIG_KSM
 	case MADV_MERGEABLE:
 	case MADV_UNMERGEABLE:
@@ -1459,6 +1573,9 @@ int do_madvise(struct mm_struct *mm, unsigned long start, size_t len_in, int beh
 	case MADV_POPULATE_READ:
 	case MADV_POPULATE_WRITE:
 		error = madvise_populate(mm, start, end, behavior);
+		break;
+	case MADV_UNSHARE:
+		error = madvise_unshare(mm, start, end);
 		break;
 	default:
 		error = madvise_walk_vmas(mm, start, end, behavior,
