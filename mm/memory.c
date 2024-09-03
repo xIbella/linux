@@ -3384,6 +3384,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		new_folio = old_folio;
 		page_copied = 1;
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
+		count_vm_event(PGCOPY);
 	} else if (vmf->pte) {
 		update_mmu_tlb(vma, vmf->address, vmf->pte);
 		pte_unmap_unlock(vmf->pte, vmf->ptl);

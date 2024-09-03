@@ -1282,6 +1282,7 @@ const char * const vmstat_text[] = {
 
 	"pgrefill",
 	"pgreuse",
+	"pgcopy",
 	"pgsteal_kswapd",
 	"pgsteal_direct",
 	"pgsteal_khugepaged",
